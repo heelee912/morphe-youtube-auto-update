@@ -135,10 +135,10 @@ jobs:
           docker run -d --name cloudflarebypass -p 8000:8000 ghcr.io/sarperavci/cloudflarebypassforscraping:latest
           for port in 8191 8000; do
             for attempt in $(seq 1 30); do
-              curl -fsS "http://localhost:$port/" >/dev/null 2>&1 && break
+              curl -sS --max-time 2 "http://localhost:$port/" >/dev/null 2>&1 && break
               sleep 2
             done
-            curl -fsS "http://localhost:$port/" >/dev/null
+            curl -sS --max-time 2 "http://localhost:$port/" >/dev/null
           done
 
       - name: Build signed arm64 YouTube APK
