@@ -318,13 +318,14 @@ public final class SelfUpdater {
 
         int sessionId = installer.createSession(params);
         boolean committed = false;
-        try (PackageInstaller.Session session = installer.openSession(sessionId);
-             InputStream input = new FileInputStream(apk);
-             OutputStream output = session.openWrite("base.apk", 0L, apk.length())) {
-            byte[] buffer = new byte[64 * 1024];
-            int count;
-            while ((count = input.read(buffer)) != -1) output.write(buffer, 0, count);
-            session.fsync(output);
+        try (PackageInstaller.Session session = installer.openSession(sessionId)) {
+            try (InputStream input = new FileInputStream(apk);
+                 OutputStream output = session.openWrite("base.apk", 0L, apk.length())) {
+                byte[] buffer = new byte[64 * 1024];
+                int count;
+                while ((count = input.read(buffer)) != -1) output.write(buffer, 0, count);
+                session.fsync(output);
+            }
 
             preferences(context).edit()
                     .putLong(KEY_PENDING_ASSET_ID, asset.id)
