@@ -36,6 +36,26 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Refresh scheduled workflow repository activity
+        if: github.event_name == 'schedule'
+        shell: bash
+        run: |
+          keepalive_file='.github/morphe-schedule-keepalive'
+          now_epoch=$(date +%s)
+          last_epoch=0
+          if [[ -s "$keepalive_file" ]]; then
+            last_epoch=$(date -d "$(cat "$keepalive_file")" +%s 2>/dev/null) || last_epoch=0
+          fi
+
+          if (( now_epoch - last_epoch >= 30 * 24 * 60 * 60 )); then
+            date -u +'%Y-%m-%dT%H:%M:%SZ' > "$keepalive_file"
+            git config user.name 'morphe-self-update-bot'
+            git config user.email 'morphe-self-update-bot@users.noreply.github.com'
+            git add "$keepalive_file"
+            git commit -m 'ci: refresh scheduled updater activity [skip ci]'
+            git push origin HEAD:main
+          fi
+
       - name: Merge official Morphe updates
         id: source
         shell: bash
