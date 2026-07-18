@@ -1,6 +1,8 @@
 rootProject.name = "morphe-patches"
 
 pluginManagement {
+    includeBuild("../morphe-patches-gradle-plugin")
+
     repositories {
         mavenLocal()
         gradlePluginPortal()

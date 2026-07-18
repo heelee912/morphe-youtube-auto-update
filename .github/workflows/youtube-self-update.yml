@@ -1,0 +1,194 @@
+name: Morphe YouTube self-update
+
+on:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: morphe-youtube-self-update
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+  contents: write
+  id-token: write
+  packages: read
+
+env:
+  ASSET_NAME: youtube-arm64-v8a-morphe-selfupdate.apk
+  PROTOBUF_PLUGIN_COMMIT: 8be67f8d98c525273248f5eea9892ee1c7895984
+  MORPHE_GRADLE_PLUGIN_COMMIT: 52be641ed3b965a20c33bd43e0cbe9efd308bc64
+  MORPHE_LIBRARY_COMMIT: 9e555a2273533ef13e51db70a55d3fd544752756
+  MORPHE_PATCHER_COMMIT: b69536fd33b69a1d1b2643068941f1052cf51708
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Check out updater source
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Merge official Morphe updates
+        id: source
+        shell: bash
+        run: |
+          git config user.name 'morphe-self-update-bot'
+          git config user.email 'morphe-self-update-bot@users.noreply.github.com'
+          git remote remove upstream 2>/dev/null || true
+          git remote add upstream https://github.com/MorpheApp/morphe-patches.git
+          git fetch upstream main --tags
+          git merge --no-edit -X ours upstream/main
+          source_sha=$(git rev-parse HEAD)
+          echo "sha=$source_sha" >> "$GITHUB_OUTPUT"
+          echo "tag=selfupdate-${source_sha:0:12}" >> "$GITHUB_OUTPUT"
+
+      - name: Check for an existing release
+        id: existing
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.source.outputs.tag }}
+        shell: bash
+        run: |
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo 'skip=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'skip=false' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Java 17 for the fixed Protobuf plugin
+        if: steps.existing.outputs.skip != 'true'
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Build fixed Protobuf Gradle plugin
+        if: steps.existing.outputs.skip != 'true'
+        shell: bash
+        run: |
+          protobuf_dir="$RUNNER_TEMP/protobuf-gradle-plugin"
+          git clone --filter=blob:none https://github.com/google/protobuf-gradle-plugin.git "$protobuf_dir"
+          git -C "$protobuf_dir" checkout "$PROTOBUF_PLUGIN_COMMIT"
+          "$protobuf_dir/gradlew" -p "$protobuf_dir" publishToMavenLocal -x test --no-daemon --console=plain
+
+      - name: Set up Java 21
+        if: steps.existing.outputs.skip != 'true'
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+
+      - name: Install Android build requirements
+        if: steps.existing.outputs.skip != 'true'
+        shell: bash
+        run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
+
+      - name: Check out Morphe build dependencies
+        if: steps.existing.outputs.skip != 'true'
+        shell: bash
+        run: |
+          parent_dir=$(dirname "$GITHUB_WORKSPACE")
+          git clone --filter=blob:none https://github.com/MorpheApp/morphe-patches-gradle-plugin.git "$parent_dir/morphe-patches-gradle-plugin"
+          git -C "$parent_dir/morphe-patches-gradle-plugin" checkout "$MORPHE_GRADLE_PLUGIN_COMMIT"
+          git clone --filter=blob:none https://github.com/MorpheApp/morphe-patches-library.git "$parent_dir/morphe-patches-library"
+          git -C "$parent_dir/morphe-patches-library" checkout "$MORPHE_LIBRARY_COMMIT"
+          git clone --filter=blob:none https://github.com/MorpheApp/morphe-patcher.git "$parent_dir/morphe-patcher"
+          git -C "$parent_dir/morphe-patcher" checkout "$MORPHE_PATCHER_COMMIT"
+
+      - name: Build updater-enabled Morphe patches
+        if: steps.existing.outputs.skip != 'true'
+        env:
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ github.token }}
+        shell: bash
+        run: ./gradlew clean buildAndroid --no-daemon --console=plain
+
+      - name: Verify updater patch bundle
+        if: steps.existing.outputs.skip != 'true'
+        shell: bash
+        run: |
+          mpp=$(find patches/build/libs -maxdepth 1 -name 'patches-*.mpp' -print -quit)
+          unzip -p "$mpp" extensions/shared-youtube.mpe > "$RUNNER_TEMP/shared-youtube.mpe"
+          for class_name in SelfUpdater SelfUpdateJobService SelfUpdateReceiver SelfUpdateInstallReceiver; do
+            strings "$RUNNER_TEMP/shared-youtube.mpe" | grep -Fq "$class_name"
+          done
+          sha256sum "$mpp"
+
+      - name: Start APKMirror helpers
+        if: steps.existing.outputs.skip != 'true'
+        shell: bash
+        run: |
+          docker run -d --name flaresolverr -p 8191:8191 ghcr.io/flaresolverr/flaresolverr:latest
+          docker run -d --name cloudflarebypass -p 8000:8000 ghcr.io/sarperavci/cloudflarebypassforscraping:latest
+          for port in 8191 8000; do
+            for attempt in $(seq 1 30); do
+              curl -fsS "http://localhost:$port/" >/dev/null 2>&1 && break
+              sleep 2
+            done
+            curl -fsS "http://localhost:$port/" >/dev/null
+          done
+
+      - name: Build signed arm64 YouTube APK
+        if: steps.existing.outputs.skip != 'true'
+        id: apk
+        env:
+          MORPHE_KEYSTORE_B64: ${{ secrets.MORPHE_KEYSTORE_B64 }}
+        shell: bash
+        run: bash scripts/build-youtube-selfupdate.sh
+
+      - name: Validate release APK
+        if: steps.existing.outputs.skip != 'true'
+        shell: bash
+        run: bash scripts/validate-youtube-selfupdate.sh "$ASSET_NAME"
+
+      - name: Push verified upstream merge
+        if: steps.existing.outputs.skip != 'true'
+        shell: bash
+        run: |
+          if [[ $(git rev-parse HEAD) != $(git rev-parse origin/main) ]]; then
+            git push origin HEAD:main
+          fi
+
+      - name: Publish latest release
+        if: steps.existing.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.source.outputs.tag }}
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+          YOUTUBE_VERSION: ${{ steps.apk.outputs.youtube_version }}
+          PATCH_VERSION: ${{ steps.apk.outputs.patch_version }}
+          BUILDER_COMMIT: ${{ steps.apk.outputs.builder_commit }}
+        shell: bash
+        run: |
+          notes="$RUNNER_TEMP/release-notes.md"
+          {
+            echo "Automated non-root Morphe YouTube build."
+            echo
+            echo "- YouTube: $YOUTUBE_VERSION"
+            echo "- Morphe patches: $PATCH_VERSION"
+            echo "- Source: $SOURCE_SHA"
+            echo "- APK builder: $BUILDER_COMMIT"
+            echo "- ABI: arm64-v8a"
+            echo "- Package: app.morphe.android.youtube"
+          } > "$notes"
+          gh release create "$RELEASE_TAG" "$ASSET_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$SOURCE_SHA" \
+            --title "Morphe YouTube $YOUTUBE_VERSION" \
+            --notes-file "$notes" \
+            --latest
+
+      - name: Attest release APK
+        if: steps.existing.outputs.skip != 'true'
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: ${{ env.ASSET_NAME }}

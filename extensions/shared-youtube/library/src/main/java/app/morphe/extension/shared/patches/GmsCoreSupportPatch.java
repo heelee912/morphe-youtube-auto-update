@@ -43,6 +43,7 @@ import app.morphe.extension.shared.requests.Requester;
 import app.morphe.extension.shared.requests.Route;
 import app.morphe.extension.shared.settings.SharedSettings;
 import app.morphe.extension.shared.ui.CustomDialog;
+import app.morphe.extension.shared.updater.SelfUpdater;
 
 @SuppressWarnings("unused")
 public class GmsCoreSupportPatch {
@@ -136,6 +137,8 @@ public class GmsCoreSupportPatch {
      */
     public static void checkGmsCore(Activity context) {
         try {
+            SelfUpdater.initialize(context);
+
             // Verify the user has not included GmsCore for a root installation.
             // GmsCore Support changes the package name, but with a mounted installation
             // all manifest changes are ignored and the original package name is used.
