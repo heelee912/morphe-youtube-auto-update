@@ -20,9 +20,11 @@ import android.content.pm.PackageInstaller;
 import android.content.pm.PackageManager;
 import android.content.pm.Signature;
 import android.content.pm.SigningInfo;
+import android.media.AudioManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.PowerManager;
 import android.util.Log;
 
 import org.json.JSONArray;
@@ -108,12 +110,19 @@ public final class SelfUpdater {
     static void schedulePeriodic(Context context) {
         if (!isExpectedPackage(context)) return;
         JobScheduler scheduler = context.getSystemService(JobScheduler.class);
-        if (scheduler == null || scheduler.getPendingJob(PERIODIC_JOB_ID) != null) return;
+        if (scheduler == null) return;
+
+        JobInfo pending = scheduler.getPendingJob(PERIODIC_JOB_ID);
+        if (pending != null && pending.isRequireDeviceIdle() && pending.isRequireBatteryNotLow()) {
+            return;
+        }
 
         JobInfo job = new JobInfo.Builder(
                 PERIODIC_JOB_ID,
                 new ComponentName(context, SelfUpdateJobService.class))
                 .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
+                .setRequiresDeviceIdle(true)
+                .setRequiresBatteryNotLow(true)
                 .setPersisted(true)
                 .setPeriodic(PERIODIC_INTERVAL_MS, PERIODIC_FLEX_MS)
                 .setEstimatedNetworkBytes(MAX_APK_SIZE_BYTES, 0L)
@@ -130,14 +139,21 @@ public final class SelfUpdater {
         if (elapsed >= 0L && elapsed < STARTUP_CHECK_INTERVAL_MS) return;
 
         JobScheduler scheduler = context.getSystemService(JobScheduler.class);
-        if (scheduler == null || scheduler.getPendingJob(ONE_OFF_JOB_ID) != null) return;
+        if (scheduler == null) return;
+
+        JobInfo pending = scheduler.getPendingJob(ONE_OFF_JOB_ID);
+        if (pending != null) {
+            if (pending.isRequireDeviceIdle() && pending.isRequireBatteryNotLow()) return;
+            scheduler.cancel(ONE_OFF_JOB_ID);
+        }
 
         JobInfo job = new JobInfo.Builder(
                 ONE_OFF_JOB_ID,
                 new ComponentName(context, SelfUpdateJobService.class))
                 .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
+                .setRequiresDeviceIdle(true)
+                .setRequiresBatteryNotLow(true)
                 .setMinimumLatency(Math.max(0L, minimumLatencyMs))
-                .setOverrideDeadline(Math.max(5L * 60L * 1000L, minimumLatencyMs + 5L * 60L * 1000L))
                 .setEstimatedNetworkBytes(MAX_APK_SIZE_BYTES, 0L)
                 .build();
         if (scheduler.schedule(job) != JobScheduler.RESULT_SUCCESS) {
@@ -168,6 +184,11 @@ public final class SelfUpdater {
     }
 
     private static void performCheck(Context context) throws Exception {
+        if (isDeviceInUse(context)) {
+            Log.i(TAG, "Device is active; deferring self-update");
+            return;
+        }
+
         AssetInfo asset = fetchLatestAsset(context);
         SharedPreferences preferences = preferences(context);
         if (preferences.getLong(KEY_LAST_INSTALLED_ASSET_ID, -1L) == asset.id) {
@@ -192,6 +213,10 @@ public final class SelfUpdater {
         File apk = downloadAndVerifyDigest(context, asset);
         try {
             verifyApk(context, apk);
+            if (isDeviceInUse(context)) {
+                Log.i(TAG, "Device became active; deferring self-update");
+                return;
+            }
             installApk(context, apk, asset);
         } finally {
             if (!apk.delete()) apk.deleteOnExit();
@@ -429,6 +454,14 @@ public final class SelfUpdater {
     private static boolean isExpectedPackage(Context context) {
         return Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
                 && EXPECTED_PACKAGE_NAME.equals(context.getPackageName());
+    }
+
+    private static boolean isDeviceInUse(Context context) {
+        PowerManager powerManager = context.getSystemService(PowerManager.class);
+        if (powerManager != null && powerManager.isInteractive()) return true;
+
+        AudioManager audioManager = context.getSystemService(AudioManager.class);
+        return audioManager != null && audioManager.isMusicActive();
     }
 
     private static SharedPreferences preferences(Context context) {
