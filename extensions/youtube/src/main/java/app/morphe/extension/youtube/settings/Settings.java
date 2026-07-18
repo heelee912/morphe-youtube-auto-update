@@ -495,7 +495,8 @@ public class Settings extends SharedYouTubeSettings {
     public static final BooleanSetting EXTERNAL_BROWSER = new BooleanSetting("morphe_external_browser", TRUE, true);
     public static final BooleanSetting SPOOF_DEVICE_DIMENSIONS = new BooleanSetting("morphe_spoof_device_dimensions", FALSE, true,
             "morphe_spoof_device_dimensions_user_dialog_message");
-    public static final EnumSetting<ClientType> SPOOF_VIDEO_STREAMS_CLIENT_TYPE = new EnumSetting<>("morphe_spoof_video_streams_client_type", ClientType.TV, true, parent(SPOOF_VIDEO_STREAMS));
+    public static final EnumSetting<ClientType> SPOOF_VIDEO_STREAMS_CLIENT_TYPE = new EnumSetting<>("morphe_spoof_video_streams_client_type", ClientType.ANDROID_VR_1_64, true, parent(SPOOF_VIDEO_STREAMS));
+    private static final BooleanSetting SPOOF_VIDEO_STREAMS_VR_DEFAULT_MIGRATED = new BooleanSetting("morphe_spoof_video_streams_vr_default_migrated", FALSE, false, false);
     public static final BooleanSetting SPOOF_VIDEO_STREAMS_AV1 = new BooleanSetting("morphe_spoof_video_streams_av1", FALSE, true,
             "morphe_spoof_video_streams_av1_user_dialog_message", new SpoofClientAv1Availability());
 
@@ -743,6 +744,14 @@ public class Settings extends SharedYouTubeSettings {
             Logger.printInfo(() -> "Resetting spoof app version");
             SPOOF_APP_VERSION_TARGET.resetToDefault();
             SPOOF_APP_VERSION.resetToDefault();
+        }
+
+        if (!SPOOF_VIDEO_STREAMS_VR_DEFAULT_MIGRATED.get()) {
+            if (SPOOF_VIDEO_STREAMS_CLIENT_TYPE.get() == ClientType.TV) {
+                Logger.printInfo(() -> "Migrating default spoof stream client from TV to Android VR 1.64");
+                SPOOF_VIDEO_STREAMS_CLIENT_TYPE.resetToDefault();
+            }
+            SPOOF_VIDEO_STREAMS_VR_DEFAULT_MIGRATED.save(TRUE);
         }
 
         // VR 1.65 is not selectable in the settings, and it's selected by spoof stream patch if needed.
