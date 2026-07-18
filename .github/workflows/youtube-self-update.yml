@@ -87,6 +87,10 @@ jobs:
           java-version: '21'
           cache: gradle
 
+      - name: Set up Android SDK
+        if: steps.existing.outputs.skip != 'true'
+        uses: android-actions/setup-android@v3
+
       - name: Install Android build requirements
         if: steps.existing.outputs.skip != 'true'
         shell: bash
